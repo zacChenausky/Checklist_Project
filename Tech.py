@@ -114,24 +114,6 @@ PATH_MANUALS_DIR  = os.path.join(SUPPORT_DIR, "Manuals")
 PATH_MANUALS_FILE = os.path.join(PATH_MANUALS_DIR, "Manual.ini")
 # Manuals files can live anywhere; Manual.ini stays in PATH_MANUALS_DIR
 MANUALS_ROOT = PATH_MANUALS_DIR  # default
-# --- Manual supervisor target (VPN fallback) ---
-def _read_manual_sup_from_supervisor(path: str = PATH_TECHINI):
-    parser = ConfigParser(inline_comment_prefixes=(";", "#"))
-    try:
-        parser.read(path, encoding="utf-8")
-    except Exception:
-        return None
-    if not parser.has_section("Supervisor"):
-        return None
-    ip   = (parser.get("Supervisor", "ip",   fallback="") or "").strip()
-    port = parser.getint("Supervisor", "port", fallback=5000)
-    name = (parser.get("Supervisor", "name", fallback="Supervisor") or "").strip()
-    if ip:
-        print(f"[TECH][CONF] Manual Supervisor target = {ip}:{port} ({name})", flush=True)
-        return (ip, port, name)
-    return None
-
-MANUAL_SUP = _read_manual_sup_from_supervisor()
 
 # Optional override via SupportingFiles\tech.ini → [Manuals] root = <path>
 try:
@@ -688,28 +670,16 @@ def read_tech_settings(path: str = PATH_TECHINI):
 # SECTION: Networking Helpers (settings, send/recv)
 # ===============================
 def send_line(ip: str, port: int, text: str, timeout: float = 3.5):
-    # --- DEBUG start: classify & log every TX line once ---
-    upper = (text or "").strip().upper()
-    if upper.startswith("MESSAGE:"):
-        kind = "REPORT" if "KIND=REPORT" in upper else "CHAT"
-        print(f"[TECH][TX][{kind}] -> {ip}:{port} :: {text[:180]}")
-    elif upper.startswith("REQUEST:"):
-        req_type = upper.split(None, 1)[0].split(":",1)[1].strip()
-        print(f"[TECH][TX][{req_type}] -> {ip}:{port} :: {text[:180]}")
-    else:
-        print(f"[TECH][TX] -> {ip}:{port} :: {text[:180]}")
-    # --- DEBUG end ---
-
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
             s.connect((ip, port))
             s.sendall((text + "\n").encode("utf-8"))
+        _log("[TX] {ip}:{port} :: {text}")
         return True, ""
     except Exception as e:
-        print(f"[TECH][TX][ERR] {ip}:{port} :: {e}")
+        _log("[TX][ERR] {ip}:{port} :: {e}")
         return False, str(e)
-
 
 
 # ===============================
@@ -1046,22 +1016,6 @@ class MainWindow(QMainWindow):
         def _queue_for_supervisor_impl(line: str):
             if not (line and isinstance(line, str)):
                 return
-
-            # --- Manual Supervisor override ---
-            if MANUAL_SUP:
-                ip, port, name = MANUAL_SUP
-                ok, _ = send_line(ip, port, line, timeout=2.5)
-                if ok:
-                    _log(f"[WIRE][→{name}] {line}")
-                    return
-                # if manual fails, fall through to discovery roster
-
-            # existing logic: use discovered supervisors
-            for (ip, port, name) in self._sup_roster:
-                ok, _ = send_line(ip, port, line, timeout=2.5)
-                if ok:
-                    _log(f"[WIRE][→{name}] {line}")
-                    return
 
             # --- Build target list (either the selected one, or all known) ---
             targets = []  # list of tuples: (ip, port, name)

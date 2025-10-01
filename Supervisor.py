@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QMessageBox, QSplitter,
     QMenu, QAction, QAbstractItemView, QInputDialog, QProgressBar, QFrame, QScrollArea,
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QSizePolicy, QCheckBox, QPlainTextEdit, QSplitter, QListWidget,
-    QFileDialog, QGridLayout  
+    QFileDialog 
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtMultimedia import QSoundEffect
@@ -1838,6 +1838,7 @@ class SupervisorWindow(QMainWindow):
         f = QFont(); f.setPointSize(14); f.setBold(True); banner.setFont(f)
         banner.setStyleSheet("QLabel{background:#dc2626;color:#fff;padding:10px;border-radius:8px;}")
         top.addWidget(banner, 1)
+        # NEW: Supervisor notes button (modeless overlay)
         self.btn_notes = QPushButton("Supervisor notes")
         self.btn_notes.setToolTip("Open Supervisor notes (A–J rows; stations in columns)")
         self.btn_notes.clicked.connect(self.open_supervisor_notes)
@@ -1846,15 +1847,18 @@ class SupervisorWindow(QMainWindow):
         self.btn_reset_all.setToolTip("Clear saved state and current view")
         self.btn_reset_all.clicked.connect(self._reset_everything)
         top.addWidget(self.btn_reset_all)
+        # --- Refresh (pull + redraw)
         self.btn_refresh = QPushButton("Refresh")
         self.btn_refresh.setToolTip("Recompute & redraw from current state (F5)")
         self.btn_refresh.clicked.connect(self._refresh_view)
         top.addWidget(self.btn_refresh)
+                # --- Send to all
         self.btn_send_all = QPushButton("Send to all")
         self.btn_send_all.setToolTip("Send a message to all connected techs")
         self.btn_send_all.clicked.connect(self._send_broadcast_message)
         top.addWidget(self.btn_send_all)
 
+        # F5 keyboard shortcut
         try:
             from PyQt5.QtWidgets import QShortcut
             from PyQt5.QtGui import QKeySequence
@@ -1863,87 +1867,107 @@ class SupervisorWindow(QMainWindow):
             pass
         layout.addLayout(top)
 
+
         split = QSplitter(Qt.Horizontal)
         layout.addWidget(split, 1)
-
         # --- Bottom horizontal cards strip (scrollable) ---
         self.cards_area = QScrollArea()
         self.cards_area.setWidgetResizable(True)
         self.cards_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.cards_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.cards_area.setFixedHeight(160)
+        self.cards_area.setFixedHeight(160)  # tweak height to taste
 
         self.cards_inner = QWidget()
         self.cards_row = QHBoxLayout(self.cards_inner)
         self.cards_row.setContentsMargins(6, 6, 6, 6)
         self.cards_row.setSpacing(8)
         self.cards_area.setWidget(self.cards_inner)
-        layout.addWidget(self.cards_area, 0)
 
-        # --- Left tree ---
+        layout.addWidget(self.cards_area, 0)  # keep strip at the bottom
+
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Tech / Match", "Teams", "KO", "Hours to KO", "MD-1", "Request"])
-        self.COL_TECH, self.COL_TEAM, self.COL_KO, self.COL_KOHRS, self.COL_MD1, self.COL_REQ = range(6)
+        self.tree.setHeaderLabels(
+            ["Tech / Match", "Teams", "KO", "Hours to KO", "MD-1", "Request"]
+        )
+
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setAnimated(False)
+
+        # ---- Column indexes (use these everywhere) ----
+        self.COL_TECH  = 0
+        self.COL_TEAM  = 1
+        self.COL_KO    = 2
+        self.COL_KOHRS = 3
+        self.COL_MD1   = 4
+        self.COL_REQ   = 5
+
+
         self.tree.setColumnWidth(self.COL_TECH, 260)
         self.tree.setColumnWidth(self.COL_TEAM, 240)
         self.tree.setColumnWidth(self.COL_KO, 70)
         self.tree.setColumnWidth(self.COL_KOHRS, 110)
         self.tree.setColumnWidth(self.COL_MD1, 80)
         self.tree.setColumnWidth(self.COL_REQ, 80)
+
         self.tree.setAlternatingRowColors(True)
+                # Right-click context menu for per-match Mute/Unmute
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+
         split.addWidget(self.tree)
 
-        # --- Right container ---
-        right = QWidget()
-        rv = QVBoxLayout(right); rv.setContentsMargins(0,0,0,0)
+        right = QWidget(); rv = QVBoxLayout(right); rv.setSpacing(6)
+        self.sel_lbl = QLabel("(none)")
+        self.sel_lbl.setStyleSheet("font-weight:700;")
+        rv.addWidget(self.sel_lbl)
 
-        # ---- Right pane: grid layout ----
-        grid = QGridLayout()
-        rv.addLayout(grid, 1)
+        # ---- Split the right-hand side into Requests (left) and Reporting (right)
+        inner = QSplitter(Qt.Horizontal)
+        rv.addWidget(inner, 1)
 
-        # ========== Top-left: CHECKS & CHECKLIST ==========
-        checks_panel = QWidget()
-        checksv = QVBoxLayout(checks_panel); checksv.setSpacing(6)
-        checksv.addWidget(QLabel("Checks & Checklist"))
-        self.checks_tree = QTreeWidget()
-        self.checks_tree.setHeaderHidden(True)
-        self.checks_tree.setRootIsDecorated(True)
-        self.checks_tree.setColumnCount(1)
-        self.checks_tree.setColumnWidth(0, 1000)
-        checksv.addWidget(self.checks_tree, 1)
+        # ========== LEFT: Requests ==========
+        req_panel = QWidget(); reqv = QVBoxLayout(req_panel); reqv.setSpacing(6)
+        reqv.addWidget(QLabel("Requests"))
 
-        # ========== Top-right: Requests & Messages ==========
-        req_panel = QWidget()
-        reqv = QVBoxLayout(req_panel); reqv.setSpacing(6)
-        reqv.addWidget(QLabel("Requests & Messages"))
         self.req_tree = QTreeWidget()
         self.req_tree.setHeaderHidden(True)
+        self.req_tree.setMinimumWidth(380)
         self.req_tree.setRootIsDecorated(True)
+        # let long lines be fully visible with horizontal scrolling
+        self.req_tree.setTextElideMode(Qt.ElideNone)
+        self.req_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.req_tree.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.req_tree.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+
+        # give the single column a sensible width so scrolling can occur
         self.req_tree.setColumnCount(1)
-        self.req_tree.setColumnWidth(0, 1000)
+        self.req_tree.setColumnWidth(0, 1000)   # adjust to taste
+
         self.req_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.req_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.req_tree.customContextMenuRequested.connect(self._on_req_context_menu)
         self.req_tree.installEventFilter(self)
         reqv.addWidget(self.req_tree, 1)
 
-        # Approve/Deny row
         row = QHBoxLayout()
         self.btn_approve = QPushButton("Approve selected"); self.btn_approve.setEnabled(False)
-        self.btn_approve.clicked.connect(self._approve_selected); row.addWidget(self.btn_approve)
+        self.btn_approve.clicked.connect(self._approve_selected)
+        row.addWidget(self.btn_approve)
+
         self.btn_deny = QPushButton("Deny"); self.btn_deny.setEnabled(False)
-        self.btn_deny.clicked.connect(self._deny_selected); row.addWidget(self.btn_deny)
-        self.btn_approve.hide(); self.btn_deny.hide()
+        self.btn_deny.clicked.connect(self._deny_selected)
+        row.addWidget(self.btn_deny)
+        self.btn_approve.hide()
+        self.btn_deny.hide()
         row.addStretch(1)
         reqv.addLayout(row)
 
-        # Notes & messages
         noterow = QHBoxLayout()
         noterow.addWidget(QLabel("Add note:"))
         self.note_entry = QLineEdit(); noterow.addWidget(self.note_entry, 1)
-        self.btn_add_note = QPushButton("Add"); self.btn_add_note.clicked.connect(self._add_note)
+        self.btn_add_note = QPushButton("Add"); self.btn_add_note.setEnabled(True)
+        self.btn_add_note.clicked.connect(self._add_note)
         noterow.addWidget(self.btn_add_note)
         reqv.addLayout(noterow)
         self.note_entry.returnPressed.connect(self._add_note)
@@ -1952,26 +1976,31 @@ class SupervisorWindow(QMainWindow):
         msgrow.addWidget(QLabel("Send message:"))
         self.msg_entry = QLineEdit(); msgrow.addWidget(self.msg_entry, 1)
         self.btn_send = QPushButton("Send"); self.btn_send.setEnabled(False)
-        self.btn_send.clicked.connect(self._send_message); msgrow.addWidget(self.btn_send)
+        self.btn_send.clicked.connect(self._send_message)
+        msgrow.addWidget(self.btn_send)
         reqv.addLayout(msgrow)
         self.msg_entry.returnPressed.connect(self._send_message)
 
-        self.status_lbl = QLabel(""); self.status_lbl.setStyleSheet("color:#0f766e;")
+        self.status_lbl = QLabel("")
+        self.status_lbl.setStyleSheet("color:#0f766e;")
         reqv.addWidget(self.status_lbl)
 
-        # Place top cells
-        grid.addWidget(checks_panel, 0, 0)
-        grid.addWidget(req_panel, 0, 1)
+        inner.addWidget(req_panel)
 
-        # ========== Bottom: Reporting ==========
-        rep_panel = QWidget()
-        repv = QVBoxLayout(rep_panel); repv.setSpacing(6)
+        # ========== RIGHT: Reporting ==========
+        rep_panel = QWidget(); repv = QVBoxLayout(rep_panel); repv.setSpacing(6)
         repv.addWidget(QLabel("Reporting"))
+
         self.report_tree = QTreeWidget()
         self.report_tree.setHeaderHidden(True)
+        self.report_tree.setMinimumWidth(340)
         self.report_tree.setRootIsDecorated(True)
+        self.report_tree.setTextElideMode(Qt.ElideNone)
+        self.report_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.report_tree.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.report_tree.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.report_tree.setColumnCount(1)
-        self.report_tree.setColumnWidth(0, 1000)
+        self.report_tree.setColumnWidth(0, 1000)   # adjust to taste
         repv.addWidget(self.report_tree, 1)
 
         rep_note_row = QHBoxLayout()
@@ -1994,22 +2023,19 @@ class SupervisorWindow(QMainWindow):
         self.report_msg_entry.returnPressed.connect(self._send_report_to_tech)
 
         self.report_status_lbl = QLabel("")
+        self.report_status_lbl.setStyleSheet("color:#0f766e;")
         repv.addWidget(self.report_status_lbl)
 
-        grid.addWidget(rep_panel, 1, 0, 1, 2)
+        inner.addWidget(rep_panel)
+        inner.setSizes([520, 420])  # tweak split proportion
 
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        grid.setRowStretch(0, 3)
-        grid.setRowStretch(1, 2)
 
-        # add right side to splitter
         split.addWidget(right)
         split.setSizes([700, 440])
 
-        # Signals
         self.tree.currentItemChanged.connect(self._on_tree_select)
         self.req_tree.itemClicked.connect(self._on_request_clicked)
+        # When a checkbox is ticked/unticked
         self.req_tree.itemChanged.connect(self._on_req_item_changed)
     def _match_title_for(self, key: str, match_idx: int) -> str:
         """Human label for a reporting group (per match)."""
@@ -4076,36 +4102,6 @@ class SupervisorWindow(QMainWindow):
 
         return {"groups": groups, "flat": flat_rows}
 
-    def _populate_checks_tree(self, key: str, mi: int):
-        """Fill the top-left Checks tree with only MD-1, hourly, and Post groups."""
-        try:
-            self.checks_tree.clear()
-            buckets = self._group_requests_for_match(key, mi)
-            for g in buckets["groups"]:
-                if g.get("kind") not in ("__MD1__", "__HOUR__", "__POST__"):
-                    continue  # only checklist groups
-                header = g.get("header") or g.get("title") or ""
-                parent = QTreeWidgetItem([header])
-                parent.setFirstColumnSpanned(True)
-                self.checks_tree.addTopLevelItem(parent)
-                parent.setExpanded(False)
-
-                # Optionally list only task-like rows (skip chat/shift/report)
-                for idx, rec in g.get("rows", []):
-                    t = (rec.get("type","") or rec.get("tag","") or "").upper()
-                    if t in ("CHAT", "SHIFT", "REQUEST", "REPLY", "REPORT", "NOT_POSSIBLE", "EARLY_MARK"):
-                        continue
-                    txt = (rec.get("item") or rec.get("text") or "").strip()
-                    if not txt:
-                        continue
-                    # prepend progress if available
-                    prog = rec.get("progress")
-                    if isinstance(prog, (int, float)):
-                        txt = f"{txt} — {int(prog)}%"
-                    leaf = QTreeWidgetItem([txt])
-                    parent.addChild(leaf)
-        except Exception as e:
-            print("checks_tree build error:", e)
 
     def _on_tree_select(self, cur: QTreeWidgetItem, prev: QTreeWidgetItem):
         # Clear indices first so the blink timer can’t touch dead items
@@ -4176,9 +4172,7 @@ class SupervisorWindow(QMainWindow):
         # ----- Build Requests list for this match -----
         m = st["matches"][mi]
         self.sel_lbl.setText(f"{self._title_for(st)}  —  Match {mi}  |  {m.get('teams','')}  |  KO {m.get('ko','')}")
-        self._populate_checks_tree(key, mi)
         self.req_tree.clear()
-        
         self._building_req_tree = True
 
         buckets = self._group_requests_for_match(key, mi)
