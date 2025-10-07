@@ -5216,28 +5216,13 @@ class SupervisorWindow(QMainWindow):
 
         # REQUEST (includes REPORT)
         if line.upper().startswith("REQUEST:"):
-            req = parse_request(line)  # your existing helper -> dict
+            req = parse_request(line)
             if req:
                 req["ip"] = ip
-                # NEW: route REPORT to Reporting pane (separate UI event)
-                kind = (req.get("type") or req.get("request") or "").upper()
-                is_report = (kind == "REPORT") or (str(req.get("report","")).strip() == "1")
-                if is_report:
-                    # normalize payload for UI thread
-                    try:
-                        match_idx = int(req.get("match","1") or 1)
-                    except Exception:
-                        match_idx = 1
-                    from_who  = req.get("from", "Tech")
-                    text      = req.get("text", "")
-                    self.ui_queue.put((
-                        "report",  # <-- handle this in the UI thread: add yellow item to Reporting for (key, match)
-                        {"match": match_idx, "from": from_who, "text": text, "ip": ip}
-                    ))
-                    return
-                # non-REPORT requests flow as before
+                # Let ALL requests (including REPORT) go through the regular request handler.
                 self.ui_queue.put(("request", req))
             return
+
 
         # REPLY (legacy CHAT reply from tech)
         if line.upper().startswith("REPLY:"):
